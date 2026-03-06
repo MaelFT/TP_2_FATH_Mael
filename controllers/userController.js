@@ -1,147 +1,250 @@
 /**
  * controllers/userController.js
  * -------------------------------------------------
- * Couche CONTROLLER (C de MVC)
+ * Couche CONTROLLER (C de MVC) — version MongoDB
  *
- * Responsabilités :
- *   - Lire req.params / req.body / req.query
- *   - Valider les données (400, 404, 409…)
- *   - Appeler le Model pour accéder aux données
- *   - Envoyer la réponse HTTP appropriée via res
+ * Chaque fonction est async/await car toutes les
+ * opérations Mongoose sont asynchrones (I/O réseau).
  *
- * Le controller ne touche PAS directement au tableau
- * de données — il délègue au Model.
+ * Gestion des erreurs :
+ *   - try/catch sur chaque handler
+ *   - ObjectId invalide → 400 Bad Request
+ *   - Document introuvable → 404 Not Found
+ *   - Email dupliqué (code 11000) → 409 Conflict
+ *   - ValidationError Mongoose → 400
+ *   - Autres erreurs → transmises au middleware global
  * -------------------------------------------------
  */
 
-const userModel = require('../models/userModel');
+const mongoose = require('mongoose');
+const User     = require('../models/userModel');
 
 const userController = {
 
   // ─────────────────────────────────────────────
   // GET /api/users
-  // Retourne tous les utilisateurs (+ filtre rôle)
+  // Optionnel : ?role=admin  ?search=ali  ?page=1&limit=2
   // ─────────────────────────────────────────────
-  getAllUsers(req, res) {
-    const { role } = req.query; // Bonus A : ?role=admin
-    const users = userModel.getAll(role || null);
+  async getAllUsers(req, res, next) {
+    try {
+      const { role, search, page, limit } = req.query;
 
-    return res.status(200).json({
-      success: true,
-      count: users.length,
-      data: users
-    });
+      // Construction du filtre dynamique
+      const filter = {};
+
+      if (role) {
+        filter.role = role; // filtre exact sur le rôle
+      }
+
+      if (search) {
+        // Bonus — Recherche insensible à la casse dans le nom
+        // new RegExp(search, 'i') → /ali/i → "Alice", "ALICIA"...
+        filter.name = new RegExp(search, 'i');
+      }
+
+      // ── Bonus : Pagination ───────────────────
+      if (page || limit) {
+        const pageNum  = Math.max(1, parseInt(page)  || 1);
+        const limitNum = Math.max(1, parseInt(limit) || 10);
+        const skip     = (pageNum - 1) * limitNum;
+
+        // Exécute les deux requêtes en parallèle (plus rapide)
+        const [users, totalCount] = await Promise.all([
+          User.find(filter).skip(skip).limit(limitNum),
+          User.countDocuments(filter)
+        ]);
+
+        return res.status(200).json({
+          success:    true,
+          page:       pageNum,
+          limit:      limitNum,
+          totalCount,
+          totalPages: Math.ceil(totalCount / limitNum),
+          data:       users
+        });
+      }
+      // ─────────────────────────────────────────
+
+      // Requête standard sans pagination
+      const users = await User.find(filter);
+
+      return res.status(200).json({
+        success: true,
+        count:   users.length,
+        data:    users
+      });
+
+    } catch (error) {
+      next(error); // transmet au middleware d'erreurs global
+    }
   },
 
   // ─────────────────────────────────────────────
   // GET /api/users/:id
-  // Retourne un utilisateur par son id
   // ─────────────────────────────────────────────
-  getUserById(req, res) {
-    // ⚠️ req.params.id est toujours une STRING → parseInt
-    const id = parseInt(req.params.id, 10);
-    const user = userModel.getById(id);
+  async getUserById(req, res, next) {
+    try {
+      const { id } = req.params;
 
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "Utilisateur non trouvé"
+      // Valider le format ObjectId AVANT la requête MongoDB
+      // Évite l'erreur "Cast to ObjectId failed" de Mongoose
+      if (!mongoose.isValidObjectId(id)) {
+        return res.status(400).json({
+          success: false,
+          message: `ObjectId invalide : "${id}"`
+        });
+      }
+
+      const user = await User.findById(id);
+
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: "Utilisateur non trouvé"
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        data:    user
       });
-    }
 
-    return res.status(200).json({
-      success: true,
-      data: user
-    });
+    } catch (error) {
+      next(error);
+    }
   },
 
   // ─────────────────────────────────────────────
   // POST /api/users
-  // Crée un nouvel utilisateur
   // ─────────────────────────────────────────────
-  createUser(req, res) {
-    const { name, email, role } = req.body;
+  async createUser(req, res, next) {
+    try {
+      const { name, email, role } = req.body;
 
-    // Validation : champs obligatoires
-    if (!name || !email) {
-      return res.status(400).json({
-        success: false,
-        message: "Les champs 'name' et 'email' sont obligatoires"
+      // Validation manuelle pour un message d'erreur lisible
+      if (!name || !email) {
+        return res.status(400).json({
+          success: false,
+          message: "Les champs 'name' et 'email' sont obligatoires"
+        });
+      }
+
+      // User.create() = new User(data) + save()
+      // Mongoose valide via le schéma avant d'insérer
+      const newUser = await User.create({ name, email, role });
+
+      return res.status(201).json({
+        success: true,
+        data:    newUser
       });
-    }
 
-    // Bonus B : email unique
-    if (userModel.emailExists(email)) {
-      return res.status(409).json({
-        success: false,
-        message: "Cet email est déjà utilisé par un autre utilisateur"
-      });
-    }
-
-    const newUser = userModel.create({ name, email, role });
-
-    return res.status(201).json({
-      success: true,
-      data: newUser
-    });
-  },
-
-  // ─────────────────────────────────────────────
-  // PUT /api/users/:id
-  // Mise à jour partielle d'un utilisateur
-  // ─────────────────────────────────────────────
-  updateUser(req, res) {
-    const id = parseInt(req.params.id, 10);
-
-    // Vérifier que l'utilisateur existe
-    const existing = userModel.getById(id);
-    if (!existing) {
-      return res.status(404).json({
-        success: false,
-        message: "Utilisateur non trouvé"
-      });
-    }
-
-    const { email } = req.body;
-
-    // Bonus B : si l'email change, vérifier l'unicité
-    // excludeId = id → ne pas se comparer à soi-même
-    if (email && email !== existing.email) {
-      if (userModel.emailExists(email, id)) {
+    } catch (error) {
+      // Erreur MongoDB : index unique violé (email dupliqué)
+      if (error.code === 11000) {
         return res.status(409).json({
           success: false,
           message: "Cet email est déjà utilisé par un autre utilisateur"
         });
       }
+      // Erreur de validation Mongoose (required, enum…)
+      if (error.name === 'ValidationError') {
+        return res.status(400).json({
+          success: false,
+          message: Object.values(error.errors).map(e => e.message).join(', ')
+        });
+      }
+      next(error);
     }
+  },
 
-    const updated = userModel.update(id, req.body);
+  // ─────────────────────────────────────────────
+  // PUT /api/users/:id
+  // ─────────────────────────────────────────────
+  async updateUser(req, res, next) {
+    try {
+      const { id } = req.params;
 
-    return res.status(200).json({
-      success: true,
-      data: updated
-    });
+      if (!mongoose.isValidObjectId(id)) {
+        return res.status(400).json({
+          success: false,
+          message: `ObjectId invalide : "${id}"`
+        });
+      }
+
+      // Protéger les champs immuables : l'appelant
+      // ne peut pas écraser _id ou createdAt
+      const { _id, createdAt, ...updateData } = req.body;
+
+      const updatedUser = await User.findByIdAndUpdate(
+        id,
+        updateData,
+        {
+          new:            true,  // retourne le document APRÈS modification
+          runValidators:  true   // rejoue les validations du schéma
+        }
+      );
+
+      if (!updatedUser) {
+        return res.status(404).json({
+          success: false,
+          message: "Utilisateur non trouvé"
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        data:    updatedUser
+      });
+
+    } catch (error) {
+      if (error.code === 11000) {
+        return res.status(409).json({
+          success: false,
+          message: "Cet email est déjà utilisé par un autre utilisateur"
+        });
+      }
+      if (error.name === 'ValidationError') {
+        return res.status(400).json({
+          success: false,
+          message: Object.values(error.errors).map(e => e.message).join(', ')
+        });
+      }
+      next(error);
+    }
   },
 
   // ─────────────────────────────────────────────
   // DELETE /api/users/:id
-  // Supprime un utilisateur
   // ─────────────────────────────────────────────
-  deleteUser(req, res) {
-    const id = parseInt(req.params.id, 10);
-    const deleted = userModel.remove(id);
+  async deleteUser(req, res, next) {
+    try {
+      const { id } = req.params;
 
-    if (!deleted) {
-      return res.status(404).json({
-        success: false,
-        message: "Utilisateur non trouvé"
-      });
+      if (!mongoose.isValidObjectId(id)) {
+        return res.status(400).json({
+          success: false,
+          message: `ObjectId invalide : "${id}"`
+        });
+      }
+
+      const deleted = await User.findByIdAndDelete(id);
+
+      if (!deleted) {
+        return res.status(404).json({
+          success: false,
+          message: "Utilisateur non trouvé"
+        });
+      }
+
+      // 204 No Content → pas de corps de réponse
+      return res.status(204).send();
+
+    } catch (error) {
+      next(error);
     }
-
-    // 204 No Content → pas de corps de réponse
-    return res.status(204).send();
   }
 
 };
 
 module.exports = userController;
+

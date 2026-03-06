@@ -1,106 +1,62 @@
 /**
  * models/userModel.js
  * -------------------------------------------------
- * Couche MODEL (M de MVC)
+ * Schéma et Modèle Mongoose pour les utilisateurs.
  *
- * Seule responsabilité : manipuler le tableau de
- * données. Aucune notion de requête HTTP ici
- * (pas de req, pas de res).
+ * Mongoose fait le lien entre JavaScript et MongoDB :
+ *   - SchemaType  → définit le type et les règles
+ *   - Model       → objet JS avec les méthodes CRUD
  *
- * Fonctions exposées :
- *   getAll(role?)     → tableau d'utilisateurs
- *   getById(id)       → utilisateur | undefined
- *   emailExists(email, excludeId?) → bool
- *   create(data)      → nouvel utilisateur
- *   update(id, data)  → utilisateur mis à jour | null
- *   remove(id)        → true | false
+ * MongoDB génère automatiquement le champ `_id`
+ * (ObjectId) qui remplace l'ancien `id` numérique.
  * -------------------------------------------------
  */
 
-const users = require('../data/users');
+const mongoose = require('mongoose');
 
-// Compteur d'ID auto-incrémenté
-// Part de 4 car les données initiales vont jusqu'à 3
-let nextId = 4;
+// ─────────────────────────────────────────────────
+// Définition du schéma
+// ─────────────────────────────────────────────────
+const userSchema = new mongoose.Schema(
+  {
+    name: {
+      type:     String,
+      required: [true, "Le champ 'name' est obligatoire"],
+      trim:     true   // supprime les espaces en début/fin
+    },
 
-const userModel = {
+    email: {
+      type:      String,
+      required:  [true, "Le champ 'email' est obligatoire"],
+      unique:    true,              // index unique dans MongoDB
+      lowercase: true,              // normalise en minuscules avant save
+      trim:      true
+    },
 
-  /**
-   * Retourne tous les utilisateurs.
-   * Si `role` est fourni, filtre sur ce rôle.
-   * → Utilisé aussi pour le Bonus A (filtrage par rôle)
-   */
-  getAll(role = null) {
-    if (role) {
-      return users.filter(u => u.role === role);
+    role: {
+      type:    String,
+      enum:    {
+        values:  ['admin', 'user'],
+        message: "Le rôle doit être 'admin' ou 'user'"
+      },
+      default: 'user'
+    },
+
+    createdAt: {
+      type:    Date,
+      default: Date.now  // ← référence, pas appel de fonction
     }
-    return users;
   },
-
-  /**
-   * Retourne l'utilisateur dont l'id correspond,
-   * ou undefined si inexistant.
-   */
-  getById(id) {
-    return users.find(u => u.id === id);
-  },
-
-  /**
-   * Vérifie si un email est déjà pris.
-   * `excludeId` permet d'ignorer l'utilisateur
-   * en cours de modification (PUT).
-   */
-  emailExists(email, excludeId = null) {
-    return !!users.find(u => u.email === email && u.id !== excludeId);
-  },
-
-  /**
-   * Crée un utilisateur, l'ajoute au tableau
-   * et retourne l'objet créé.
-   */
-  create({ name, email, role = 'user' }) {
-    const newUser = {
-      id: nextId++,
-      name,
-      email,
-      role,
-      createdAt: new Date().toISOString().split('T')[0] // "YYYY-MM-DD"
-    };
-    users.push(newUser);
-    return newUser;
-  },
-
-  /**
-   * Mise à jour partielle : seuls les champs
-   * présents dans `data` sont modifiés.
-   * `id` et `createdAt` sont volontairement exclus.
-   * Retourne l'utilisateur mis à jour, ou null.
-   */
-  update(id, data) {
-    const index = users.findIndex(u => u.id === id);
-    if (index === -1) return null;
-
-    const allowed = ['name', 'email', 'role'];
-    allowed.forEach(field => {
-      if (data[field] !== undefined) {
-        users[index][field] = data[field];
-      }
-    });
-
-    return users[index];
-  },
-
-  /**
-   * Supprime l'utilisateur du tableau.
-   * Retourne true si supprimé, false si introuvable.
-   */
-  remove(id) {
-    const index = users.findIndex(u => u.id === id);
-    if (index === -1) return false;
-    users.splice(index, 1);
-    return true;
+  {
+    // Désactive les champs __v (version interne Mongoose)
+    // et versionKey pour garder les réponses propres
+    versionKey: false
   }
+);
 
-};
+// ─────────────────────────────────────────────────
+// Export du modèle
+// Mongoose crée la collection "users" (pluriel de "User")
+// ─────────────────────────────────────────────────
+module.exports = mongoose.model('User', userSchema);
 
-module.exports = userModel;

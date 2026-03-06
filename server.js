@@ -4,6 +4,8 @@
  * Point d'entrée de l'application Express.
  *
  * Responsabilités :
+ *   - Charger les variables d'environnement (.env)
+ *   - Connecter MongoDB via connectDB()
  *   - Créer l'application Express
  *   - Enregistrer les middlewares globaux
  *   - Monter les routeurs
@@ -11,10 +13,17 @@
  * -------------------------------------------------
  */
 
-const express = require('express');
+// dotenv doit être chargé EN PREMIER pour que process.env soit disponible
+require('dotenv').config();
+
+const express   = require('express');
+const connectDB = require('./config/db');
+
+// Connexion à MongoDB (async — erreur fatale si elle échoue)
+connectDB();
 
 const app  = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 // ─────────────────────────────────────────────────
 // Middlewares globaux
@@ -59,7 +68,8 @@ app.use((req, res, next) => {
 // Routes
 // ─────────────────────────────────────────────────
 
-const usersRouter = require('./routes/users');
+const usersRouter   = require('./routes/users');
+const errorHandler  = require('./middleware/errorHandler');
 
 // Toutes les routes /api/users/* sont gérées par usersRouter
 app.use('/api/users', usersRouter);
@@ -70,7 +80,7 @@ app.use('/api/users', usersRouter);
  */
 app.get('/', (_req, res) => {
   res.status(200).json({
-    message: "API Gestion Utilisateurs — TP Séance 2",
+    message: "API Gestion Utilisateurs — TP Séance 3 (MongoDB)",
     status:  "running",
     endpoints: {
       "GET    /api/users":        "Lister tous les utilisateurs",
@@ -78,10 +88,17 @@ app.get('/', (_req, res) => {
       "POST   /api/users":        "Créer un utilisateur",
       "PUT    /api/users/:id":    "Modifier un utilisateur",
       "DELETE /api/users/:id":    "Supprimer un utilisateur",
-      "GET    /api/users?role=X": "Filtrer par rôle (bonus)"
+      "GET    /api/users?role=X":          "Filtrer par rôle",
+      "GET    /api/users?search=X":        "Recherche par nom (bonus)",
+      "GET    /api/users?page=1&limit=2":  "Pagination (bonus)"
     }
   });
 });
+
+// ─────────────────────────────────────────────────
+// Middleware global d'erreurs (DOIT être en dernier)
+// ─────────────────────────────────────────────────
+app.use(errorHandler);
 
 // ─────────────────────────────────────────────────
 // Démarrage
